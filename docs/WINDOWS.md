@@ -1,6 +1,20 @@
 # Ralph for Claude Code - Windows Setup Guide
 
-This guide explains how to install and run Ralph on Windows using Git Bash.
+This guide explains how to install and run Ralph on Windows.
+
+## Quick Start (Windows CMD/PowerShell)
+
+If you have Git for Windows installed, you can run Ralph directly from CMD or PowerShell:
+
+```cmd
+cd path\to\ralph-claude-code
+install-windows.bat
+```
+
+Then from any project directory:
+```cmd
+ralph.bat --inline-monitor
+```
 
 ## Prerequisites
 
@@ -46,6 +60,22 @@ The Claude Code CLI will be automatically downloaded when you first run Ralph. N
 
 ## Installation
 
+### Option A: Windows CMD/PowerShell (Easiest)
+
+1. Download or clone the repository
+2. Open CMD or PowerShell in the ralph-claude-code folder
+3. Run:
+```cmd
+install-windows.bat
+```
+
+This will:
+- Check for Git Bash, Node.js, and jq
+- Run the bash installer
+- Optionally add Ralph to your Windows PATH
+
+### Option B: Git Bash
+
 Open Git Bash and run:
 
 ```bash
@@ -57,18 +87,42 @@ cd ralph-claude-code
 ./install.sh
 ```
 
-### Add to PATH
-
-Add this line to your `~/.bashrc` file in Git Bash:
-
+Add to PATH in Git Bash:
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-Then reload:
-```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 ```
+
+## Windows Batch File Launchers
+
+Ralph includes `.bat` files for running from CMD/PowerShell:
+
+| File | Description |
+|------|-------------|
+| `ralph.bat` | Run Ralph loop (defaults to --inline-monitor) |
+| `ralph-monitor.bat` | Run the monitor dashboard |
+| `ralph-setup.bat` | Create a new Ralph project |
+| `install-windows.bat` | Install Ralph on Windows |
+
+### Usage from CMD/PowerShell
+
+```cmd
+:: Navigate to ralph-claude-code directory first, or add to PATH
+ralph.bat                      :: Run with inline monitor (default)
+ralph.bat --help               :: Show help
+ralph.bat --verbose            :: Verbose mode
+ralph-setup.bat my-project     :: Create new project
+```
+
+### Adding to Windows PATH
+
+The installer can add Ralph to your PATH automatically. Or manually:
+
+1. Press `Win + X` → System → Advanced system settings
+2. Click "Environment Variables"
+3. Under "User variables", select `Path` → Edit
+4. Add: `C:\path\to\ralph-claude-code`
+5. Click OK and restart your terminal
 
 ## Usage on Windows
 
