@@ -25,6 +25,7 @@ SLEEP_DURATION=3600     # 1 hour in seconds
 CALL_COUNT_FILE=".call_count"
 TIMESTAMP_FILE=".last_reset"
 USE_TMUX=false
+USE_INLINE_MONITOR=false  # Inline status display (auto-enabled on Windows when --monitor used)
 
 # Modern Claude CLI configuration (Phase 1.1)
 CLAUDE_OUTPUT_FORMAT="json"              # Options: json, text
@@ -151,33 +152,19 @@ check_tmux_available() {
     platform=$(get_platform)
 
     if [[ "$platform" == "windows" ]]; then
-        # tmux is not available on Windows/Git Bash
-        log_status "WARN" "tmux is not available on Windows/Git Bash."
-        echo ""
-        echo -e "${YELLOW}Windows Alternative:${NC}"
-        echo "  1. Open TWO Git Bash windows"
-        echo "  2. In window 1: Run 'ralph' (the main loop)"
-        echo "  3. In window 2: Run 'ralph-monitor' (the dashboard)"
-        echo ""
-        echo -e "${BLUE}Would you like to continue without integrated monitoring? (y/n)${NC} "
-        read -t 10 -n 1 response
-        echo
-        if [[ "$response" != "y" && "$response" != "Y" ]]; then
-            log_status "INFO" "Exiting. Run 'ralph' without --monitor flag instead."
-            exit 0
-        fi
-        # Continue without tmux - just run the loop
+        # tmux is not available on Windows/Git Bash - use inline monitor instead
+        log_status "INFO" "Windows detected - using inline monitor mode"
         USE_TMUX=false
-        return 1  # Signal to skip tmux setup
+        USE_INLINE_MONITOR=true
+        return 1  # Signal to skip tmux setup, use inline monitor
     fi
 
     if ! command -v tmux &> /dev/null; then
-        log_status "ERROR" "tmux is not installed. Please install tmux or run without --monitor flag."
-        echo "Install tmux:"
-        echo "  Ubuntu/Debian: sudo apt-get install tmux"
-        echo "  macOS: brew install tmux"
-        echo "  CentOS/RHEL: sudo yum install tmux"
-        exit 1
+        log_status "WARN" "tmux is not installed. Using inline monitor mode instead."
+        log_status "INFO" "Install tmux for split-pane monitoring: apt-get install tmux / brew install tmux"
+        USE_TMUX=false
+        USE_INLINE_MONITOR=true
+        return 1  # Signal to skip tmux setup, use inline monitor
     fi
     return 0  # tmux available
 }
@@ -280,6 +267,101 @@ log_status() {
     
     echo -e "${color}[$timestamp] [$level] $message${NC}"
     echo "[$timestamp] [$level] $message" >> "$LOG_DIR/ralph.log"
+}
+
+# Display inline status bar (Windows-friendly monitoring)
+# Shows a compact status line that updates in place
+display_inline_status() {
+    local loop_count=$1
+    local status=$2
+    local indicator=${3:-"⠋"}
+    local extra_info=${4:-""}
+
+    # Only display if inline monitor is enabled
+    [[ "$USE_INLINE_MONITOR" != "true" ]] && return
+
+    local calls_made=$(cat "$CALL_COUNT_FILE" 2>/dev/null || echo "0")
+    local cb_state="OK"
+    local cb_color=$GREEN
+
+    # Get circuit breaker state
+    if [[ -f ".circuit_breaker_state" ]]; then
+        cb_state=$(jq -r '.state // "CLOSED"' .circuit_breaker_state 2>/dev/null)
+        case "$cb_state" in
+            "CLOSED") cb_color=$GREEN ;;
+            "HALF_OPEN") cb_color=$YELLOW; cb_state="WARN" ;;
+            "OPEN") cb_color=$RED; cb_state="HALT" ;;
+        esac
+    fi
+
+    # Get remaining tasks from @fix_plan.md
+    local remaining_tasks="-"
+    if [[ -f "@fix_plan.md" ]]; then
+        remaining_tasks=$(grep -c "^- \[ \]" "@fix_plan.md" 2>/dev/null || echo "0")
+    fi
+
+    # Build status line
+    local time_str=$(date '+%H:%M:%S')
+    local status_color=$BLUE
+    case "$status" in
+        "executing") status_color=$YELLOW ;;
+        "success"|"completed") status_color=$GREEN ;;
+        "error"|"failed") status_color=$RED ;;
+    esac
+
+    # Clear line and print status bar
+    printf "\r\033[K"  # Clear current line
+    printf "${WHITE}[${time_str}]${NC} "
+    printf "${PURPLE}Loop #%-3d${NC} │ "  "$loop_count"
+    printf "${status_color}%s${NC} %s │ " "$indicator" "$status"
+    printf "Calls: ${CYAN}%d/%d${NC} │ " "$calls_made" "$MAX_CALLS_PER_HOUR"
+    printf "Tasks: ${CYAN}%s${NC} │ " "$remaining_tasks"
+    printf "CB: ${cb_color}%s${NC}" "$cb_state"
+
+    if [[ -n "$extra_info" ]]; then
+        printf " │ %s" "$extra_info"
+    fi
+}
+
+# Display inline status header (shown once at start)
+display_inline_header() {
+    [[ "$USE_INLINE_MONITOR" != "true" ]] && return
+
+    echo ""
+    echo -e "${WHITE}╔══════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${WHITE}║                     🤖 RALPH - Inline Monitor Mode                       ║${NC}"
+    echo -e "${WHITE}╠══════════════════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${WHITE}║${NC} Press Ctrl+C to stop │ Status updates shown below                       ${WHITE}║${NC}"
+    echo -e "${WHITE}╚══════════════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+}
+
+# Display inline status summary (shown between loops)
+display_inline_summary() {
+    local loop_count=$1
+    local result=$2
+    local duration=$3
+
+    [[ "$USE_INLINE_MONITOR" != "true" ]] && return
+
+    local result_icon="✓"
+    local result_color=$GREEN
+    case "$result" in
+        "success") result_icon="✅"; result_color=$GREEN ;;
+        "failed"|"error") result_icon="❌"; result_color=$RED ;;
+        "timeout") result_icon="⏰"; result_color=$YELLOW ;;
+        "circuit_breaker") result_icon="🛑"; result_color=$RED ;;
+    esac
+
+    # Get files changed from last analysis
+    local files_changed=0
+    if [[ -f ".response_analysis" ]]; then
+        files_changed=$(jq -r '.analysis.files_modified // 0' .response_analysis 2>/dev/null)
+    fi
+
+    echo ""  # New line after status bar
+    printf "${result_color}${result_icon} Loop #%d completed${NC} " "$loop_count"
+    printf "(${CYAN}%ds${NC}, ${CYAN}%d files${NC} changed)\n" "$duration" "$files_changed"
 }
 
 # Update status JSON for external monitoring
@@ -1021,8 +1103,11 @@ execute_claude_code() {
 }
 EOF
 
-        # Only log if verbose mode is enabled
-        if [[ "$VERBOSE_PROGRESS" == "true" ]]; then
+        # Display inline status (Windows-friendly monitoring)
+        display_inline_status "$loop_count" "executing" "$progress_indicator" "${elapsed_seconds}s"
+
+        # Only log if verbose mode is enabled (and not using inline monitor)
+        if [[ "$VERBOSE_PROGRESS" == "true" && "$USE_INLINE_MONITOR" != "true" ]]; then
             if [[ -n "$last_line" ]]; then
                 log_status "INFO" "$progress_indicator Claude Code: $last_line... (${elapsed_seconds}s)"
             else
@@ -1167,11 +1252,15 @@ main() {
     # Initialize session tracking before entering the loop
     init_session_tracking
 
+    # Show inline monitor header if enabled
+    display_inline_header
+
     log_status "INFO" "Starting main loop..."
     log_status "INFO" "DEBUG: About to enter while loop, loop_count=$loop_count"
-    
+
     while true; do
         loop_count=$((loop_count + 1))
+        local loop_start_time=$(date +%s)
         log_status "INFO" "DEBUG: Successfully incremented loop_count to $loop_count"
 
         # Update session last_used timestamp
@@ -1219,8 +1308,13 @@ main() {
         execute_claude_code "$loop_count"
         local exec_result=$?
         
+        # Calculate loop duration
+        local loop_end_time=$(date +%s)
+        local loop_duration=$((loop_end_time - loop_start_time))
+
         if [ $exec_result -eq 0 ]; then
             update_status "$loop_count" "$(cat "$CALL_COUNT_FILE")" "completed" "success"
+            display_inline_summary "$loop_count" "success" "$loop_duration"
 
             # Brief pause between successful executions
             sleep 5
@@ -1228,6 +1322,7 @@ main() {
             # Circuit breaker opened
             reset_session "circuit_breaker_trip"
             update_status "$loop_count" "$(cat "$CALL_COUNT_FILE")" "circuit_breaker_open" "halted" "stagnation_detected"
+            display_inline_summary "$loop_count" "circuit_breaker" "$loop_duration"
             log_status "ERROR" "🛑 Circuit breaker has opened - halting loop"
             log_status "INFO" "Run 'ralph --reset-circuit' to reset the circuit breaker after addressing issues"
             break
@@ -1270,6 +1365,7 @@ main() {
             fi
         else
             update_status "$loop_count" "$(cat "$CALL_COUNT_FILE")" "failed" "error"
+            display_inline_summary "$loop_count" "failed" "$loop_duration"
             log_status "WARN" "Execution failed, waiting 30 seconds before retry..."
             sleep 30
         fi
@@ -1294,6 +1390,8 @@ Options:
     -p, --prompt FILE       Set prompt file (default: $PROMPT_FILE)
     -s, --status            Show current status and exit
     -m, --monitor           Start with tmux session and live monitor (requires tmux)
+                            On Windows: auto-enables inline monitor mode
+    -i, --inline-monitor    Show inline status bar in terminal (Windows-friendly)
     -v, --verbose           Show detailed progress updates during execution
     -t, --timeout MIN       Set Claude Code execution timeout in minutes (default: $CLAUDE_TIMEOUT_MINUTES)
     --reset-circuit         Reset circuit breaker to CLOSED state
@@ -1323,11 +1421,16 @@ Example workflow:
 Examples:
     $0 --calls 50 --prompt my_prompt.md
     $0 --monitor             # Start with integrated tmux monitoring
+    $0 --inline-monitor      # Inline status bar (works on Windows/Git Bash)
     $0 --monitor --timeout 30   # 30-minute timeout for complex tasks
     $0 --verbose --timeout 5    # 5-minute timeout with detailed progress
     $0 --output-format text     # Use legacy text output format
     $0 --no-continue            # Disable session continuity
     $0 --session-expiry 48      # 48-hour session expiration
+
+Windows Usage:
+    $0 --monitor             # Auto-uses inline monitor mode
+    $0 --inline-monitor      # Explicit inline monitor mode
 
 HELPEOF
 }
@@ -1362,6 +1465,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -v|--verbose)
             VERBOSE_PROGRESS=true
+            shift
+            ;;
+        -i|--inline-monitor)
+            USE_INLINE_MONITOR=true
             shift
             ;;
         -t|--timeout)

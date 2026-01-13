@@ -81,7 +81,26 @@ cd my-project
 
 ### Running Ralph
 
-On Windows, the `--monitor` flag works differently. Since tmux is not available, you'll need to use **two Git Bash windows**:
+On Windows, Ralph has an **inline monitor mode** that shows real-time status updates directly in your terminal - no need for multiple windows!
+
+**Recommended: Inline Monitor Mode**
+```bash
+cd my-project
+ralph --monitor           # Auto-detects Windows, uses inline mode
+# or explicitly:
+ralph --inline-monitor    # Force inline monitor mode
+```
+
+The inline monitor shows:
+- Current loop number
+- Execution status with spinner animation
+- API calls used (e.g., 5/100)
+- Remaining tasks from @fix_plan.md
+- Circuit breaker status
+
+**Alternative: Two-Window Setup**
+
+If you prefer the traditional setup:
 
 **Window 1 - Main Loop:**
 ```bash
@@ -94,8 +113,6 @@ ralph
 cd my-project
 ralph-monitor
 ```
-
-If you run `ralph --monitor` on Windows, it will ask if you want to continue without integrated monitoring and run the loop in the current window.
 
 ### Other Commands
 

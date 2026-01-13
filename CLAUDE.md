@@ -255,7 +255,9 @@ Ralph integrates with:
 ### Windows Compatibility
 
 On Windows (Git Bash/MSYS2):
-- tmux is not available; use two separate Git Bash windows for loop + monitor
+- **Inline monitor mode**: `ralph --monitor` auto-enables inline status display
+- Shows loop count, status, API calls, tasks remaining, circuit breaker status
+- Alternatively use `ralph --inline-monitor` explicitly
 - All other features work identically to Linux/macOS
 - See [docs/WINDOWS.md](docs/WINDOWS.md) for detailed setup
 
@@ -333,9 +335,11 @@ bats tests/unit/test_cli_parsing.bats
   - Cross-platform date handling (GNU/BSD/MSYS differences)
   - Cross-platform stat command for session file age
   - Cross-platform timeout implementation (no external `timeout` dependency)
-- Windows-specific monitoring alternative
-  - Graceful degradation when tmux unavailable
-  - User-friendly prompts for two-window workflow
+- **Inline monitor mode** - Windows-friendly status display
+  - Real-time status bar showing loop count, calls, tasks, circuit breaker
+  - Auto-enabled on Windows when using `--monitor` flag
+  - Available on all platforms via `--inline-monitor` or `-i` flag
+  - Functions: `display_inline_status()`, `display_inline_header()`, `display_inline_summary()`
 - Updated installer with Windows-specific guidance
   - Dependency installation instructions for Windows
   - PATH configuration for Git Bash
