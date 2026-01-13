@@ -80,8 +80,97 @@ NC='\033[0m' # No Color
 # Initialize directories
 mkdir -p "$LOG_DIR" "$DOCS_DIR"
 
-# Check if tmux is available
+# Cross-platform timeout wrapper
+# Usage: run_with_timeout <seconds> <command> [args...]
+# Returns: exit code of command, or 124 on timeout
+run_with_timeout() {
+    local timeout_secs=$1
+    shift
+    local cmd=("$@")
+
+    local platform
+    platform=$(get_platform)
+
+    case "$platform" in
+        windows)
+            # Git Bash/MSYS on Windows - timeout command may not exist
+            # Use background process with manual timeout monitoring
+            "${cmd[@]}" &
+            local pid=$!
+            local elapsed=0
+
+            while kill -0 $pid 2>/dev/null; do
+                if [[ $elapsed -ge $timeout_secs ]]; then
+                    kill -TERM $pid 2>/dev/null
+                    sleep 1
+                    kill -KILL $pid 2>/dev/null
+                    return 124  # Timeout exit code
+                fi
+                sleep 1
+                ((elapsed++))
+            done
+
+            wait $pid
+            return $?
+            ;;
+        *)
+            # Linux/macOS - use timeout command (GNU coreutils or gtimeout on macOS)
+            if command -v timeout &>/dev/null; then
+                timeout "${timeout_secs}s" "${cmd[@]}"
+                return $?
+            elif command -v gtimeout &>/dev/null; then
+                gtimeout "${timeout_secs}s" "${cmd[@]}"
+                return $?
+            else
+                # Fallback to background process method
+                "${cmd[@]}" &
+                local pid=$!
+                local elapsed=0
+
+                while kill -0 $pid 2>/dev/null; do
+                    if [[ $elapsed -ge $timeout_secs ]]; then
+                        kill -TERM $pid 2>/dev/null
+                        sleep 1
+                        kill -KILL $pid 2>/dev/null
+                        return 124
+                    fi
+                    sleep 1
+                    ((elapsed++))
+                done
+
+                wait $pid
+                return $?
+            fi
+            ;;
+    esac
+}
+
+# Check if tmux is available (or provide Windows alternative)
 check_tmux_available() {
+    local platform
+    platform=$(get_platform)
+
+    if [[ "$platform" == "windows" ]]; then
+        # tmux is not available on Windows/Git Bash
+        log_status "WARN" "tmux is not available on Windows/Git Bash."
+        echo ""
+        echo -e "${YELLOW}Windows Alternative:${NC}"
+        echo "  1. Open TWO Git Bash windows"
+        echo "  2. In window 1: Run 'ralph' (the main loop)"
+        echo "  3. In window 2: Run 'ralph-monitor' (the dashboard)"
+        echo ""
+        echo -e "${BLUE}Would you like to continue without integrated monitoring? (y/n)${NC} "
+        read -t 10 -n 1 response
+        echo
+        if [[ "$response" != "y" && "$response" != "Y" ]]; then
+            log_status "INFO" "Exiting. Run 'ralph' without --monitor flag instead."
+            exit 0
+        fi
+        # Continue without tmux - just run the loop
+        USE_TMUX=false
+        return 1  # Signal to skip tmux setup
+    fi
+
     if ! command -v tmux &> /dev/null; then
         log_status "ERROR" "tmux is not installed. Please install tmux or run without --monitor flag."
         echo "Install tmux:"
@@ -90,6 +179,7 @@ check_tmux_available() {
         echo "  CentOS/RHEL: sudo yum install tmux"
         exit 1
     fi
+    return 0  # tmux available
 }
 
 # Setup tmux session with monitor
@@ -467,17 +557,29 @@ get_session_file_age_hours() {
         return
     fi
 
-    local os_type
-    os_type=$(uname)
+    local platform
+    platform=$(get_platform)
 
     local file_mtime
-    if [[ "$os_type" == "Darwin" ]]; then
-        # macOS (BSD stat)
-        file_mtime=$(stat -f %m "$file" 2>/dev/null)
-    else
-        # Linux (GNU stat)
-        file_mtime=$(stat -c %Y "$file" 2>/dev/null)
-    fi
+    case "$platform" in
+        darwin)
+            # macOS (BSD stat)
+            file_mtime=$(stat -f %m "$file" 2>/dev/null)
+            ;;
+        windows)
+            # Git Bash/MSYS on Windows - uses GNU-like stat
+            # Try GNU stat first, fall back to parsing ls output
+            file_mtime=$(stat -c %Y "$file" 2>/dev/null)
+            if [[ -z "$file_mtime" ]]; then
+                # Fallback: use date reference trick
+                file_mtime=$(date -r "$file" +%s 2>/dev/null)
+            fi
+            ;;
+        *)
+            # Linux (GNU stat)
+            file_mtime=$(stat -c %Y "$file" 2>/dev/null)
+            ;;
+    esac
 
     # Handle stat failure - return -1 to indicate error
     # This prevents false expiration when stat fails
@@ -852,16 +954,13 @@ execute_claude_code() {
         log_status "INFO" "Using legacy CLI mode (text output)"
     fi
 
-    # Execute Claude Code
+    # Execute Claude Code (cross-platform: works on Linux, macOS, and Windows/Git Bash)
     if [[ "$use_modern_cli" == "true" ]]; then
         # Modern execution with command array (shell-injection safe)
-        # Execute array directly without bash -c to prevent shell metacharacter interpretation
-        if timeout ${timeout_seconds}s "${CLAUDE_CMD_ARGS[@]}" > "$output_file" 2>&1 &
-        then
-            :  # Continue to wait loop
-        else
+        "${CLAUDE_CMD_ARGS[@]}" > "$output_file" 2>&1 &
+        local start_status=$?
+        if [[ $start_status -ne 0 ]]; then
             log_status "ERROR" "❌ Failed to start Claude Code process (modern mode)"
-            # Fall back to legacy mode
             log_status "INFO" "Falling back to legacy mode..."
             use_modern_cli=false
         fi
@@ -869,22 +968,35 @@ execute_claude_code() {
 
     # Fall back to legacy stdin piping if modern mode failed or not enabled
     if [[ "$use_modern_cli" == "false" ]]; then
-        if timeout ${timeout_seconds}s $CLAUDE_CODE_CMD < "$PROMPT_FILE" > "$output_file" 2>&1 &
-        then
-            :  # Continue to wait loop
-        else
+        $CLAUDE_CODE_CMD < "$PROMPT_FILE" > "$output_file" 2>&1 &
+        local start_status=$?
+        if [[ $start_status -ne 0 ]]; then
             log_status "ERROR" "❌ Failed to start Claude Code process"
             return 1
         fi
     fi
 
-    # Get PID and monitor progress
+    # Get PID and monitor progress with timeout
     local claude_pid=$!
     local progress_counter=0
+    local elapsed_seconds=0
+    local timed_out=false
 
     # Show progress while Claude Code is running
     while kill -0 $claude_pid 2>/dev/null; do
         progress_counter=$((progress_counter + 1))
+        elapsed_seconds=$((progress_counter * 10))
+
+        # Check for timeout
+        if [[ $elapsed_seconds -ge $timeout_seconds ]]; then
+            log_status "WARN" "⏰ Claude Code execution timed out after ${CLAUDE_TIMEOUT_MINUTES} minutes"
+            kill -TERM $claude_pid 2>/dev/null
+            sleep 2
+            kill -KILL $claude_pid 2>/dev/null
+            timed_out=true
+            break
+        fi
+
         case $((progress_counter % 4)) in
             1) progress_indicator="⠋" ;;
             2) progress_indicator="⠙" ;;
@@ -903,7 +1015,7 @@ execute_claude_code() {
 {
     "status": "executing",
     "indicator": "$progress_indicator",
-    "elapsed_seconds": $((progress_counter * 10)),
+    "elapsed_seconds": $elapsed_seconds,
     "last_output": "$last_line",
     "timestamp": "$(date '+%Y-%m-%d %H:%M:%S')"
 }
@@ -912,14 +1024,20 @@ EOF
         # Only log if verbose mode is enabled
         if [[ "$VERBOSE_PROGRESS" == "true" ]]; then
             if [[ -n "$last_line" ]]; then
-                log_status "INFO" "$progress_indicator Claude Code: $last_line... (${progress_counter}0s)"
+                log_status "INFO" "$progress_indicator Claude Code: $last_line... (${elapsed_seconds}s)"
             else
-                log_status "INFO" "$progress_indicator Claude Code working... (${progress_counter}0s elapsed)"
+                log_status "INFO" "$progress_indicator Claude Code working... (${elapsed_seconds}s elapsed)"
             fi
         fi
 
         sleep 10
     done
+
+    # Handle timeout case
+    if [[ "$timed_out" == "true" ]]; then
+        echo '{"status": "timeout", "timestamp": "'$(date '+%Y-%m-%d %H:%M:%S')'"}' > "$PROGRESS_FILE"
+        return 1
+    fi
 
     # Wait for the process to finish and get exit code
     wait $claude_pid
@@ -1319,8 +1437,12 @@ done
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     # If tmux mode requested, set it up
     if [[ "$USE_TMUX" == "true" ]]; then
-        check_tmux_available
-        setup_tmux_session
+        # check_tmux_available returns 1 on Windows (skip tmux, continue with loop)
+        if check_tmux_available; then
+            setup_tmux_session
+            # setup_tmux_session calls exit, so we won't reach here unless it fails
+        fi
+        # On Windows or if tmux check fails gracefully, continue to main loop
     fi
 
     # Start the main loop

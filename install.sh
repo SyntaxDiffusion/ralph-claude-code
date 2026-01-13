@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # Ralph for Claude Code - Global Installation Script
+# Supports: Linux, macOS, and Windows (Git Bash/MSYS2)
 set -e
 
 # Configuration
@@ -15,56 +16,85 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
+# Detect platform
+get_platform() {
+    local os_type
+    os_type=$(uname -s)
+    case "$os_type" in
+        Darwin) echo "darwin" ;;
+        Linux) echo "linux" ;;
+        MINGW*|MSYS*|CYGWIN*) echo "windows" ;;
+        *) echo "unknown" ;;
+    esac
+}
+
+PLATFORM=$(get_platform)
+
 log() {
     local level=$1
     local message=$2
     local color=""
-    
+
     case $level in
         "INFO")  color=$BLUE ;;
         "WARN")  color=$YELLOW ;;
         "ERROR") color=$RED ;;
         "SUCCESS") color=$GREEN ;;
     esac
-    
+
     echo -e "${color}[$(date '+%H:%M:%S')] [$level] $message${NC}"
 }
 
 # Check dependencies
 check_dependencies() {
     log "INFO" "Checking dependencies..."
-    
+    log "INFO" "Detected platform: $PLATFORM"
+
     local missing_deps=()
-    
+
     if ! command -v node &> /dev/null && ! command -v npx &> /dev/null; then
         missing_deps+=("Node.js/npm")
     fi
-    
+
     if ! command -v jq &> /dev/null; then
         missing_deps+=("jq")
     fi
-    
+
     if ! command -v git &> /dev/null; then
         missing_deps+=("git")
     fi
-    
+
     if [ ${#missing_deps[@]} -ne 0 ]; then
         log "ERROR" "Missing required dependencies: ${missing_deps[*]}"
         echo "Please install the missing dependencies:"
-        echo "  Ubuntu/Debian: sudo apt-get install nodejs npm jq git"
-        echo "  macOS: brew install node jq git"
-        echo "  CentOS/RHEL: sudo yum install nodejs npm jq git"
+        case "$PLATFORM" in
+            windows)
+                echo "  Windows (Git Bash):"
+                echo "    - Node.js: Download from https://nodejs.org/"
+                echo "    - jq: choco install jq  (or download from https://stedolan.github.io/jq/)"
+                echo "    - git: Already included with Git Bash"
+                ;;
+            darwin)
+                echo "  macOS: brew install node jq git"
+                ;;
+            *)
+                echo "  Ubuntu/Debian: sudo apt-get install nodejs npm jq git"
+                echo "  CentOS/RHEL: sudo yum install nodejs npm jq git"
+                ;;
+        esac
         exit 1
     fi
-    
+
     # Claude Code CLI will be downloaded automatically when first used
     log "INFO" "Claude Code CLI (@anthropic-ai/claude-code) will be downloaded when first used."
-    
-    # Check tmux (optional)
-    if ! command -v tmux &> /dev/null; then
+
+    # Check tmux (optional - not available on Windows)
+    if [[ "$PLATFORM" == "windows" ]]; then
+        log "INFO" "tmux is not available on Windows. Use two Git Bash windows for monitoring."
+    elif ! command -v tmux &> /dev/null; then
         log "WARN" "tmux not found. Install for integrated monitoring: apt-get install tmux / brew install tmux"
     fi
-    
+
     log "SUCCESS" "Dependencies check completed"
 }
 
@@ -217,14 +247,27 @@ EOF
 # Check PATH
 check_path() {
     log "INFO" "Checking PATH configuration..."
-    
+
     if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
         log "WARN" "$INSTALL_DIR is not in your PATH"
         echo ""
-        echo "Add this to your ~/.bashrc, ~/.zshrc, or ~/.profile:"
-        echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
-        echo ""
-        echo "Then run: source ~/.bashrc (or restart your terminal)"
+        case "$PLATFORM" in
+            windows)
+                echo "Add this to your ~/.bashrc (Git Bash):"
+                echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+                echo ""
+                echo "Then restart Git Bash or run: source ~/.bashrc"
+                echo ""
+                echo "Alternatively, add to Windows PATH:"
+                echo "  %USERPROFILE%\\.local\\bin"
+                ;;
+            *)
+                echo "Add this to your ~/.bashrc, ~/.zshrc, or ~/.profile:"
+                echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+                echo ""
+                echo "Then run: source ~/.bashrc (or restart your terminal)"
+                ;;
+        esac
         echo ""
     else
         log "SUCCESS" "$INSTALL_DIR is already in PATH"
@@ -235,31 +278,46 @@ check_path() {
 main() {
     echo "🚀 Installing Ralph for Claude Code globally..."
     echo ""
-    
+
     check_dependencies
     create_install_dirs
     install_scripts
     install_ralph_loop
     install_setup
     check_path
-    
+
     echo ""
     log "SUCCESS" "🎉 Ralph for Claude Code installed successfully!"
     echo ""
     echo "Global commands available:"
-    echo "  ralph --monitor          # Start Ralph with integrated monitoring"
-    echo "  ralph --help            # Show Ralph options"
-    echo "  ralph-setup my-project  # Create new Ralph project"
-    echo "  ralph-import prd.md     # Convert PRD to Ralph project"
-    echo "  ralph-monitor           # Manual monitoring dashboard"
+    if [[ "$PLATFORM" == "windows" ]]; then
+        echo "  ralph                   # Start Ralph loop"
+        echo "  ralph --help            # Show Ralph options"
+        echo "  ralph-setup my-project  # Create new Ralph project"
+        echo "  ralph-import prd.md     # Convert PRD to Ralph project"
+        echo "  ralph-monitor           # Monitoring dashboard (run in separate window)"
+    else
+        echo "  ralph --monitor          # Start Ralph with integrated monitoring"
+        echo "  ralph --help            # Show Ralph options"
+        echo "  ralph-setup my-project  # Create new Ralph project"
+        echo "  ralph-import prd.md     # Convert PRD to Ralph project"
+        echo "  ralph-monitor           # Manual monitoring dashboard"
+    fi
     echo ""
     echo "Quick start:"
     echo "  1. ralph-setup my-awesome-project"
     echo "  2. cd my-awesome-project"
     echo "  3. # Edit PROMPT.md with your requirements"
-    echo "  4. ralph --monitor"
+    if [[ "$PLATFORM" == "windows" ]]; then
+        echo "  4. ralph                 # In first Git Bash window"
+        echo "  5. ralph-monitor         # In second Git Bash window (optional)"
+        echo ""
+        echo "Note: On Windows, use two Git Bash windows for loop + monitoring."
+    else
+        echo "  4. ralph --monitor"
+    fi
     echo ""
-    
+
     if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
         echo "⚠️  Don't forget to add $INSTALL_DIR to your PATH (see above)"
     fi

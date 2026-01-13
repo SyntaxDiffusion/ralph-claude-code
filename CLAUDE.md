@@ -6,7 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is the Ralph for Claude Code repository - an autonomous AI development loop system that enables continuous development cycles with intelligent exit detection and rate limiting.
 
-**Version**: v0.9.8 | **Tests**: 276 passing (100% pass rate) | **CI/CD**: GitHub Actions
+**Version**: v0.9.9 | **Tests**: 276 passing (100% pass rate) | **CI/CD**: GitHub Actions
+
+**Platforms**: Linux, macOS, Windows (Git Bash/MSYS2)
+
+> **Windows Users**: See [docs/WINDOWS.md](docs/WINDOWS.md) for detailed setup instructions.
 
 ## Core Architecture
 
@@ -49,8 +53,10 @@ The system uses a modular architecture with reusable components in the `lib/` di
    - Confidence scoring for exit decisions
 
 3. **lib/date_utils.sh** - Cross-platform date utilities
-   - ISO timestamp generation for logging
+   - Platform detection: `get_platform()` returns "darwin", "linux", "windows", or "unknown"
+   - ISO timestamp generation for logging (handles GNU/BSD/MSYS date differences)
    - Epoch time calculations for rate limiting
+   - Windows/Git Bash/MSYS2 compatible
 
 ## Key Commands
 
@@ -240,11 +246,18 @@ After installation, the following global commands are available:
 
 Ralph integrates with:
 - **Claude Code CLI**: Uses `npx @anthropic/claude-code` as the execution engine
-- **tmux**: Terminal multiplexer for integrated monitoring sessions
+- **tmux**: Terminal multiplexer for integrated monitoring sessions (Linux/macOS only)
 - **Git**: Expects projects to be git repositories
 - **jq**: For JSON processing of status and exit signals
 - **GitHub Actions**: CI/CD pipeline for automated testing
 - **Standard Unix tools**: bash, grep, date, etc.
+
+### Windows Compatibility
+
+On Windows (Git Bash/MSYS2):
+- tmux is not available; use two separate Git Bash windows for loop + monitor
+- All other features work identically to Linux/macOS
+- See [docs/WINDOWS.md](docs/WINDOWS.md) for detailed setup
 
 ## Exit Conditions and Thresholds
 
@@ -313,6 +326,23 @@ bats tests/unit/test_cli_parsing.bats
 ```
 
 ## Recent Improvements
+
+### Windows/Git Bash Support (v0.9.9)
+- Added full Windows support via Git Bash/MSYS2
+  - Platform detection: `get_platform()` in `lib/date_utils.sh`
+  - Cross-platform date handling (GNU/BSD/MSYS differences)
+  - Cross-platform stat command for session file age
+  - Cross-platform timeout implementation (no external `timeout` dependency)
+- Windows-specific monitoring alternative
+  - Graceful degradation when tmux unavailable
+  - User-friendly prompts for two-window workflow
+- Updated installer with Windows-specific guidance
+  - Dependency installation instructions for Windows
+  - PATH configuration for Git Bash
+- Created comprehensive Windows documentation
+  - `docs/WINDOWS.md` with prerequisites, installation, and usage
+  - Troubleshooting guide for common Windows issues
+  - WSL2 recommendation for power users
 
 ### Modern CLI for PRD Import (v0.9.8)
 - Modernized `ralph_import.sh` to use Claude Code CLI JSON output format
